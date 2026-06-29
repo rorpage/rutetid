@@ -252,16 +252,19 @@ async function enturPost(endpoint, query) {
   return res.json();
 }
 
-async function fetchVehicles(codespace) {
+async function fetchVehicles() {
+  const b = map.getBounds();
   const json = await enturPost(API_VEHICLES, `{
-    vehicles(codespaceId: "${codespace}") {
+    vehicles {
       vehicleId lastUpdated mode
       line { publicCode }
       destinationName
       location { latitude longitude }
     }
   }`);
-  return json.data?.vehicles || [];
+  return (json.data?.vehicles || []).filter(v =>
+    v.location && b.contains([v.location.latitude, v.location.longitude])
+  );
 }
 
 async function fetchNearbyStops(lat, lon) {
@@ -380,7 +383,7 @@ async function refresh() {
   txt.textContent = 'Fetching live data…';
   try {
     const c = CITIES[currentCity];
-    const [vehicles, stops] = await Promise.all([fetchVehicles(c.codespace), fetchNearbyStops(c.lat, c.lon)]);
+    const [vehicles, stops] = await Promise.all([fetchVehicles(), fetchNearbyStops(c.lat, c.lon)]);
     renderVehicles(vehicles);
     renderStops(stops);
     const t = new Date();
