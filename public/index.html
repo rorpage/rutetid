@@ -280,7 +280,7 @@ async function fetchDepartures(stopId) {
   const json = await enturPost(API_JOURNEY, `{
     stopPlace(id: "${stopId}") {
       id name
-      estimatedCalls(numberOfDepartures: 12, timeRange: 3600, omitNonBoarding: true) {
+      estimatedCalls(numberOfDepartures: 12, timeRange: 3600) {
         expectedDepartureTime aimedDepartureTime realtime
         destinationDisplay { frontText }
         serviceJourney { transportMode line { publicCode } }
