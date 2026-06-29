@@ -98,7 +98,9 @@
 
     .stop-name-header { font-size: 14px; font-weight: 600; margin-bottom: 12px; padding-top: 4px; line-height: 1.3; }
 
-    .departure-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+    .departure-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); cursor: pointer; border-radius: 4px; transition: background 0.1s; }
+    .departure-row:hover { background: rgba(255,255,255,0.04); }
+    .departure-row.active { background: rgba(88,166,255,0.08); }
     .departure-row:last-child { border-bottom: none; }
     .dep-line {
       font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700;
@@ -216,6 +218,7 @@ let activeModes    = new Set(['bus','rail','tram','metro','ferry']);
 let vehicleMarkers = new Map();
 let stopMarkers    = new Map();
 let refreshTimer   = null;
+let routeLayer     = null;
 
 const map = L.map('map', { zoomControl: false });
 L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -267,13 +270,14 @@ async function fetchVehicles() {
   );
 }
 
-async function fetchNearbyStops(lat, lon) {
+async function fetchNearbyStops() {
+  const b = map.getBounds();
   const json = await enturPost(API_JOURNEY, `{
     stopPlacesByBbox(
-      minimumLatitude: ${lat - 0.04}
-      maximumLatitude: ${lat + 0.04}
-      minimumLongitude: ${lon - 0.07}
-      maximumLongitude: ${lon + 0.07}
+      minimumLatitude: ${b.getSouth()}
+      maximumLatitude: ${b.getNorth()}
+      minimumLongitude: ${b.getWest()}
+      maximumLongitude: ${b.getEast()}
     ) { id name transportMode latitude longitude }
   }`);
   return json.data?.stopPlacesByBbox || [];
@@ -286,7 +290,7 @@ async function fetchDepartures(stopId) {
       estimatedCalls(numberOfDepartures: 12, timeRange: 3600) {
         expectedDepartureTime aimedDepartureTime realtime
         destinationDisplay { frontText }
-        serviceJourney { transportMode line { publicCode } }
+        serviceJourney { id transportMode line { publicCode } }
       }
     }
   }`);
@@ -296,6 +300,55 @@ async function fetchDepartures(stopId) {
 function normalizeMode(raw) {
   const m = (raw || 'bus').toLowerCase();
   return m === 'water' ? 'ferry' : m;
+}
+
+function decodePolyline(enc) {
+  const pts = []; let i = 0, lat = 0, lon = 0;
+  while (i < enc.length) {
+    let b, shift = 0, result = 0;
+    do { b = enc.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    shift = result = 0;
+    do { b = enc.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lon += result & 1 ? ~(result >> 1) : result >> 1;
+    pts.push([lat / 1e5, lon / 1e5]);
+  }
+  return pts;
+}
+
+function clearRoute() {
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  document.querySelectorAll('.departure-row.active').forEach(r => r.classList.remove('active'));
+}
+
+async function fetchAndDrawRoute(journeyId, color, rowEl) {
+  clearRoute();
+  rowEl.classList.add('active');
+  const json = await enturPost(API_JOURNEY, `{
+    serviceJourney(id: "${journeyId}") {
+      pointsOnLink { points }
+      passingTimes {
+        quay { stopPlace { id name latitude longitude } }
+      }
+    }
+  }`);
+  const sj = json.data?.serviceJourney;
+  if (!sj) return;
+  const group = L.layerGroup();
+  if (sj.pointsOnLink?.points) {
+    L.polyline(decodePolyline(sj.pointsOnLink.points), { color, weight: 4, opacity: 0.8 }).addTo(group);
+  } else {
+    const coords = sj.passingTimes.map(pt => pt.quay?.stopPlace).filter(s => s?.latitude).map(s => [s.latitude, s.longitude]);
+    if (coords.length) L.polyline(coords, { color, weight: 4, opacity: 0.8 }).addTo(group);
+  }
+  for (const pt of sj.passingTimes) {
+    const s = pt.quay?.stopPlace;
+    if (!s?.latitude) continue;
+    L.circleMarker([s.latitude, s.longitude], { radius: 4, color, fillColor: '#0d1117', fillOpacity: 1, weight: 2 })
+      .bindPopup(`<div style="font-size:12px;font-family:Inter,sans-serif;color:#e6edf3">${s.name}</div>`)
+      .addTo(group);
+  }
+  routeLayer = group.addTo(map);
 }
 
 function renderVehicles(vehicles) {
@@ -340,6 +393,7 @@ function renderStops(stops) {
 }
 
 async function loadStopDepartures(stopId, stopName) {
+  clearRoute();
   document.getElementById('panel-title').textContent = 'Departures';
   document.getElementById('panel-close').style.display = 'block';
   document.getElementById('map-hint').classList.add('hidden');
@@ -356,18 +410,19 @@ async function loadStopDepartures(stopId, stopName) {
   const now = Date.now();
   let html = `<div class="stop-name-header">${data.name}</div>`;
   for (const call of data.estimatedCalls) {
-    const mode    = (call.serviceJourney?.transportMode || 'bus').toLowerCase();
-    const line    = call.serviceJourney?.line?.publicCode || '?';
-    const dest    = call.destinationDisplay?.frontText || 'Unknown';
-    const color   = MODE_COLORS[mode] || '#7d8590';
-    const dep     = new Date(call.expectedDepartureTime);
-    const aimed   = new Date(call.aimedDepartureTime);
-    const mins    = Math.round((dep - now) / 60000);
-    const late    = dep - aimed;
-    const timeStr = mins <= 0 ? 'Now' : mins === 1 ? '1 min' : `${mins} min`;
-    const soon    = mins <= 2;
-    const rt      = call.realtime ? `<div class="dep-realtime">● Live${late > 60000 ? ' · ' + Math.round(late/60000) + ' min late' : ''}</div>` : '';
-    html += `<div class="departure-row">
+    const mode      = (call.serviceJourney?.transportMode || 'bus').toLowerCase();
+    const line      = call.serviceJourney?.line?.publicCode || '?';
+    const dest      = call.destinationDisplay?.frontText || 'Unknown';
+    const color     = MODE_COLORS[mode] || '#7d8590';
+    const journeyId = call.serviceJourney?.id || '';
+    const dep       = new Date(call.expectedDepartureTime);
+    const aimed     = new Date(call.aimedDepartureTime);
+    const mins      = Math.round((dep - now) / 60000);
+    const late      = dep - aimed;
+    const timeStr   = mins <= 0 ? 'Now' : mins === 1 ? '1 min' : `${mins} min`;
+    const soon      = mins <= 2;
+    const rt        = call.realtime ? `<div class="dep-realtime">● Live${late > 60000 ? ' · ' + Math.round(late/60000) + ' min late' : ''}</div>` : '';
+    html += `<div class="departure-row" data-journey-id="${journeyId}" data-color="${color}">
       <div class="dep-line" style="background:${color}22;color:${color};border:1px solid ${color}55">${line}</div>
       <div class="dep-dest">${dest}${rt}</div>
       <div class="dep-time${soon ? ' soon' : ''}">${timeStr}</div>
@@ -383,7 +438,7 @@ async function refresh() {
   txt.textContent = 'Fetching live data…';
   try {
     const c = CITIES[currentCity];
-    const [vehicles, stops] = await Promise.all([fetchVehicles(), fetchNearbyStops(c.lat, c.lon)]);
+    const [vehicles, stops] = await Promise.all([fetchVehicles(), fetchNearbyStops()]);
     renderVehicles(vehicles);
     renderStops(stops);
     const t = new Date();
@@ -402,6 +457,7 @@ function switchCity(key) {
   currentCity = key;
   const c = CITIES[key];
   map.setView([c.lat, c.lon], c.zoom);
+  clearRoute();
   for (const m of vehicleMarkers.values()) map.removeLayer(m);
   for (const m of stopMarkers.values())    map.removeLayer(m);
   vehicleMarkers.clear(); stopMarkers.clear();
@@ -438,6 +494,7 @@ document.querySelectorAll('.city-btn').forEach(btn => {
 });
 
 document.getElementById('panel-close').addEventListener('click', () => {
+  clearRoute();
   document.getElementById('panel-title').textContent = 'Click a stop or vehicle';
   document.getElementById('panel-close').style.display = 'none';
   document.getElementById('departures-list').innerHTML =
@@ -445,7 +502,14 @@ document.getElementById('panel-close').addEventListener('click', () => {
   document.getElementById('map-hint').classList.remove('hidden');
 });
 
+document.getElementById('departures-list').addEventListener('click', e => {
+  const row = e.target.closest('.departure-row');
+  if (!row?.dataset.journeyId) return;
+  fetchAndDrawRoute(row.dataset.journeyId, row.dataset.color, row);
+});
+
 map.on('click', () => document.getElementById('map-hint').classList.add('hidden'));
+map.on('moveend', () => refresh());
 
 // Init mode buttons as active
 document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('dimmed'));
