@@ -136,6 +136,28 @@
     .vehicle-popup-line { font-family: 'Space Mono', monospace; font-weight: 700; font-size: 13px; }
     .vehicle-popup-dest { font-size: 12px; color: var(--muted); margin-top: 2px; }
     .vehicle-popup-updated { font-size: 10px; color: var(--muted); margin-top: 6px; }
+
+    .back-btn {
+      font-family: 'Inter', sans-serif; font-size: 11px; font-weight: 500;
+      padding: 5px 10px; border-radius: 4px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); cursor: pointer; margin-bottom: 12px;
+    }
+    .back-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    .route-header { font-size: 14px; font-weight: 600; margin-bottom: 12px; padding-top: 4px; display: flex; align-items: center; gap: 8px; }
+    .route-line-badge { font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+
+    .station-row {
+      display: flex; align-items: center; gap: 10px; padding: 8px 0;
+      border-bottom: 1px solid var(--border); cursor: pointer;
+      transition: background 0.1s; border-radius: 4px;
+    }
+    .station-row:hover { background: rgba(255,255,255,0.04); }
+    .station-row:last-child { border-bottom: none; }
+    .station-row.origin { background: rgba(88,166,255,0.08); }
+    .station-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid; background: #0d1117; flex-shrink: 0; }
+    .station-name { flex: 1; font-size: 12px; color: var(--text); line-height: 1.3; }
+    .station-name.origin-label { font-weight: 600; color: var(--accent); }
   </style>
 </head>
 <body>
@@ -219,6 +241,8 @@ let vehicleMarkers = new Map();
 let stopMarkers    = new Map();
 let refreshTimer   = null;
 let routeLayer     = null;
+let currentStopId   = null;
+let currentStopName = null;
 
 const map = L.map('map', { zoomControl: false });
 L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -321,7 +345,16 @@ function clearRoute() {
   document.querySelectorAll('.departure-row.active').forEach(r => r.classList.remove('active'));
 }
 
-async function fetchAndDrawRoute(journeyId, color, rowEl) {
+/**
+ * Fetches a service journey's route geometry and passing times, draws the route on the map,
+ * and renders the ordered station list in the sidebar.
+ * @param {string} journeyId - The service journey ID from Entur.
+ * @param {string} color - CSS color for the transport mode.
+ * @param {Element} rowEl - The clicked departure row element.
+ * @param {string} lineCode - Public line code (e.g. "37").
+ * @param {string} dest - Destination front text.
+ */
+async function fetchAndDrawRoute(journeyId, color, rowEl, lineCode, dest) {
   clearRoute();
   rowEl.classList.add('active');
   const json = await enturPost(API_JOURNEY, `{
@@ -349,6 +382,52 @@ async function fetchAndDrawRoute(journeyId, color, rowEl) {
       .addTo(group);
   }
   routeLayer = group.addTo(map);
+  renderRouteStations(sj, color, lineCode, dest);
+}
+
+/**
+ * Renders an ordered list of stations for a service journey in the sidebar.
+ * Replaces the departure list with a scrollable stop sequence. A back button
+ * restores the departure board for the previously selected stop.
+ * @param {Object} sj - The serviceJourney object from the Entur API.
+ * @param {string} color - CSS color for the transport mode.
+ * @param {string} lineCode - Public line code shown to riders (e.g. "37", "T5").
+ * @param {string} dest - Destination front text for the route header.
+ */
+function renderRouteStations(sj, color, lineCode, dest) {
+  document.getElementById('panel-title').textContent = 'Stations';
+  const list = document.getElementById('departures-list');
+  const stops = sj.passingTimes.map(pt => pt.quay?.stopPlace).filter(s => s?.name);
+
+  let html = `<button class="back-btn" id="route-back-btn">← Departures</button>
+<div class="route-header">
+  <div class="route-line-badge" style="background:${color}22;color:${color};border:1px solid ${color}55">${lineCode || '?'}</div>
+  <div>${dest || 'Unknown'}</div>
+</div>`;
+
+  for (const s of stops) {
+    const isOrigin = s.name === currentStopName;
+    html += `<div class="station-row${isOrigin ? ' origin' : ''}" data-lat="${s.latitude || ''}" data-lon="${s.longitude || ''}">
+  <div class="station-dot" style="border-color:${color}${isOrigin ? ';background:' + color : ''}"></div>
+  <div class="station-name${isOrigin ? ' origin-label' : ''}">${s.name}</div>
+</div>`;
+  }
+
+  list.innerHTML = html;
+
+  const originEl = list.querySelector('.station-row.origin');
+  if (originEl) originEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+
+  document.getElementById('route-back-btn').addEventListener('click', () => {
+    clearRoute();
+    if (currentStopId) loadStopDepartures(currentStopId, currentStopName);
+  });
+
+  list.querySelectorAll('.station-row').forEach(row => {
+    const lat = parseFloat(row.dataset.lat);
+    const lon = parseFloat(row.dataset.lon);
+    if (lat && lon) row.addEventListener('click', () => map.setView([lat, lon], 16));
+  });
 }
 
 function renderVehicles(vehicles) {
@@ -392,8 +471,15 @@ function renderStops(stops) {
   document.getElementById('stat-stops').textContent = stopMarkers.size;
 }
 
+/**
+ * Loads and renders live departures for a stop in the sidebar panel.
+ * @param {string} stopId - The Entur stop place ID (e.g. "NSR:StopPlace:12345").
+ * @param {string} stopName - Human-readable stop name shown as the panel header.
+ */
 async function loadStopDepartures(stopId, stopName) {
   clearRoute();
+  currentStopId   = stopId;
+  currentStopName = stopName;
   document.getElementById('panel-title').textContent = 'Departures';
   document.getElementById('panel-close').style.display = 'block';
   document.getElementById('map-hint').classList.add('hidden');
@@ -422,7 +508,7 @@ async function loadStopDepartures(stopId, stopName) {
     const timeStr   = mins <= 0 ? 'Now' : mins === 1 ? '1 min' : `${mins} min`;
     const soon      = mins <= 2;
     const rt        = call.realtime ? `<div class="dep-realtime">● Live${late > 60000 ? ' · ' + Math.round(late/60000) + ' min late' : ''}</div>` : '';
-    html += `<div class="departure-row" data-journey-id="${journeyId}" data-color="${color}">
+    html += `<div class="departure-row" data-journey-id="${journeyId}" data-color="${color}" data-line="${line}" data-dest="${dest}">
       <div class="dep-line" style="background:${color}22;color:${color};border:1px solid ${color}55">${line}</div>
       <div class="dep-dest">${dest}${rt}</div>
       <div class="dep-time${soon ? ' soon' : ''}">${timeStr}</div>
@@ -505,7 +591,7 @@ document.getElementById('panel-close').addEventListener('click', () => {
 document.getElementById('departures-list').addEventListener('click', e => {
   const row = e.target.closest('.departure-row');
   if (!row?.dataset.journeyId) return;
-  fetchAndDrawRoute(row.dataset.journeyId, row.dataset.color, row);
+  fetchAndDrawRoute(row.dataset.journeyId, row.dataset.color, row, row.dataset.line, row.dataset.dest);
 });
 
 map.on('click', () => document.getElementById('map-hint').classList.add('hidden'));
