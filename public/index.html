@@ -290,10 +290,15 @@ async function fetchDepartures(stopId) {
   return json.data?.stopPlace;
 }
 
+function normalizeMode(raw) {
+  const m = (raw || 'bus').toLowerCase();
+  return m === 'water' ? 'ferry' : m;
+}
+
 function renderVehicles(vehicles) {
   const seen = new Set();
   for (const v of vehicles) {
-    const mode = (v.mode || 'bus').toLowerCase();
+    const mode = normalizeMode(v.mode);
     if (!activeModes.has(mode) || !v.location) continue;
     const { latitude: lat, longitude: lon } = v.location;
     const id   = v.vehicleId;
@@ -318,8 +323,9 @@ function renderStops(stops) {
   const seen = new Set();
   for (const s of stops) {
     if (!s.latitude || !s.longitude) continue;
-    const mode = (s.transportMode || 'bus').toLowerCase();
-    if (!activeModes.has(mode)) continue;
+    const modes = (Array.isArray(s.transportMode) ? s.transportMode : [s.transportMode]).map(normalizeMode);
+    const mode = modes.find(m => activeModes.has(m));
+    if (!mode) continue;
     seen.add(s.id);
     if (stopMarkers.has(s.id)) continue;
     const marker = L.marker([s.latitude, s.longitude], { icon: stopIcon(mode), zIndexOffset: 0 }).addTo(map);
