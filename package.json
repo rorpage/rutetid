@@ -1,0 +1,9 @@
+{
+  "name": "rutetid",
+  "version": "1.0.0",
+  "description": "Live Norwegian transit map powered by Entur",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "license": "MIT"
+}
