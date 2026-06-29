@@ -79,9 +79,10 @@
     .mode-btn .dot.ferry { background: var(--ferry); }
     .mode-btn.dimmed { opacity: 0.3; }
 
-    .stats-row { padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 20px; }
+    .stats-row { padding: 12px 20px; border-bottom: 1px solid var(--border); display: flex; gap: 14px; flex-wrap: wrap; }
     .stat { display: flex; flex-direction: column; gap: 1px; }
     .stat-num { font-family: 'Space Mono', monospace; font-size: 18px; font-weight: 700; line-height: 1; }
+    .stat-num.time { font-size: 14px; }
     .stat-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
 
     .panel-header {
@@ -192,7 +193,8 @@
     <div class="stats-row">
       <div class="stat"><div class="stat-num" id="stat-vehicles">—</div><div class="stat-lbl">Vehicles</div></div>
       <div class="stat"><div class="stat-num" id="stat-stops">—</div><div class="stat-lbl">Stops</div></div>
-      <div class="stat"><div class="stat-num" id="stat-refresh">—</div><div class="stat-lbl">Updated</div></div>
+      <div class="stat"><div class="stat-num time" id="stat-refresh">—</div><div class="stat-lbl">Updated</div></div>
+      <div class="stat"><div class="stat-num time" id="stat-norsktime">—</div><div class="stat-lbl">Norsktid</div></div>
     </div>
 
     <div class="panel-header">
@@ -599,6 +601,20 @@ map.on('moveend', () => refresh());
 
 // Init mode buttons as active
 document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('dimmed'));
+
+/**
+ * Updates the Norsktid display with the current time in the Europe/Oslo timezone.
+ * Runs every second so the clock stays live between data refreshes.
+ */
+function tickNorskClock() {
+  document.getElementById('stat-norsktime').textContent =
+    new Date().toLocaleTimeString('no-NO', {
+      timeZone: 'Europe/Oslo',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    });
+}
+setInterval(tickNorskClock, 1000);
+tickNorskClock();
 
 refresh().then(scheduleRefresh);
 </script>
